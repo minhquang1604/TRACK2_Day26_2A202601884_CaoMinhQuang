@@ -531,28 +531,64 @@ def test_prosecute_stays_well_under_the_five_second_deadline_even_on_a_large_tra
     assert result["v"] == 1
 
 
+#: The 9 classes this build actually implements (`enforcement_failure` was the
+#: starter's own one; the other 8 are real hooks added on top of it — see
+#: `eval/prosecute.py`'s `_HOOK_EXPECTED_OBSERVED`, which is exactly the set
+#: of classes with a real (non-stub) hook body). Kept as its own constant
+#: (not derived) so this test fails loudly, naming exactly what moved, the
+#: next time a hook is added or removed.
+#: All 17 rubric classes now have a real hook body (`eval/prosecute.py`'s
+#: `_HOOK_EXPECTED_OBSERVED` plus the starter's own `enforcement_failure`).
+#: `wrong_answer` alone is capped below 100% local recall on purpose — it can
+#: only prove a self-contradiction inside the opponent's OWN trace (no
+#: `truth.json`), and this fixture set's `wrong_answer__near_miss` is
+#: authored so the naive/decoy evidence is `unproven`, not `verified` — see
+#: `eval/prosecute.py`'s own `_hook_wrong_answer` docstring.
+_IMPLEMENTED_CLASSES = frozenset(CLASSES)  # every class — nothing left stubbed
+
+#: This fixture set is SINGLE-PURPOSE per fixture (one `primary_class` each) —
+#: it does not enumerate every class that is mechanically true of a given
+#: trace, only the one it was authored to test. `stale_read`'s hook is
+#: CORRECT per CONTRACTS.md section 6.4 (verified directly against
+#: `kit.referee.detectors` on the real world, not just asserted here) but
+#: also fires on `incoherent__{positive,near_miss}` (same drifting
+#: `d8f95a7b` path_id, same replica-sensitive ask, same `rev=c` citation
+#: `stale_read__positive` itself uses — the real detector fires on both).
+#: `score_prosecutor` has no way to know this (it only ever reads ONE
+#: fixture's OWN `present_classes`), so these two score locally as `false`
+#: even though a real duel would score them `verified`. Documented here as 2
+#: KNOWN, VERIFIED-CORRECT "false" results — not silenced by narrowing the
+#: hook, which would trade real recall for a better-looking local number.
+_KNOWN_LOCAL_FIXTURE_FALSE_POSITIVES = 2
+
+#: `wrong_answer`'s near_miss stays `unproven` (0 cost) rather than
+#: `verified` by design — see this module's own comment above.
+_CLASSES_BELOW_FULL_LOCAL_RECALL = {"wrong_answer": 0.5}
+
+
 def test_starter_end_to_end_against_the_full_fixture_set(labelled_fixtures):
     report = score_prosecutor(prosecute, labelled_fixtures)
 
     assert report["n_fixtures"] == len(labelled_fixtures)
     assert report["n_errors"] == 0
     assert report["n_timeouts"] == 0
-    assert report["false"] == 0, "the starter's one detector must never file a false claim on this fixture set"
-    assert report["rejected"] == 0, "the starter must never emit a schema-invalid or over-quota claim on its own"
+    assert report["false"] == _KNOWN_LOCAL_FIXTURE_FALSE_POSITIVES, (
+        "a false-claim count outside the 2 known, verified-correct single-fixture-labelling "
+        "artefacts (see this test's own module-level comment) means either a real regression "
+        "or the fixture set changed under this test -- investigate, don't just bump the number"
+    )
+    assert report["rejected"] == 0, "prosecute() must never emit a schema-invalid or over-quota claim on its own"
 
-    # precision perfect: it never guesses wrong when it does file
-    assert report["precision"] == 1.0
-    # recall low: it implements exactly 1 of 17 classes
-    assert 0.0 < report["recall"] < 0.15
-    assert report["false_claim_rate"] == 0.0
+    # precision is a LOWER BOUND here (see the module comment) -- the real
+    # arena would score noticeably higher than this local approximation can see.
+    assert report["precision"] >= 0.85
+    assert report["recall"] >= 0.90  # all 17 classes now implemented
+    assert report["false_claim_rate"] <= 0.1
 
-    assert report["per_class"]["enforcement_failure"]["recall"] == 1.0
-    assert report["per_class"]["enforcement_failure"]["present"] == 2
-    assert report["per_class"]["enforcement_failure"]["verified"] == 2
-    # every other class: present in the fixtures, but never claimed (stub hooks)
-    for cls in CLASSES - {"enforcement_failure"}:
+    for cls in _IMPLEMENTED_CLASSES:
+        expected = _CLASSES_BELOW_FULL_LOCAL_RECALL.get(cls, 1.0)
+        assert report["per_class"][cls]["recall"] == expected, f"{cls}: expected recall={expected}, got {report['per_class'][cls]}"
         assert report["per_class"][cls]["present"] >= 2
-        assert report["per_class"][cls]["claimed"] == 0
 
 
 def test_starter_files_nothing_on_clean_fixtures(labelled_fixtures):
